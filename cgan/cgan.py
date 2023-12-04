@@ -11,10 +11,8 @@ class GAN():
     def __init__(self, dataset):
         self.dataset = dataset
         self.noise_size = 48
-
-        self.latent_dim = self.noise_size
-
-        self.generator = self.define_generator(self.noise_size)
+        self.latent_dim = 48
+        self.generator = self.define_generator()
         self.discriminator = self.define_discriminator()
         self.gan_model = self.define_gan()
 
@@ -31,9 +29,9 @@ class GAN():
     def generate_noise(self, n_samples, n_classes=7):
         """Creamos muestras de ruido"""
         #Creamos ruido
-        x_input = np.random.randn(self.noise_size * self.noise_size * n_samples)
+        x_input = np.random.randn(self.noise_size * n_samples)
         #Ajustamos al tamaño de las imágenes reales
-        z_input = x_input.reshape(n_samples, self.noise_size, self.noise_size)
+        z_input = x_input.reshape(n_samples, self.noise_size)
         #Generamos etiquetas
         labels = np.random.randint(0, n_classes, n_samples)
         
@@ -42,7 +40,7 @@ class GAN():
 
     def generate_fake_samples(self, n_samples): 
         #get the noise calling the function
-        z_input, labels_input = self.generate_noise(self.latent_dim, n_samples)
+        z_input, labels_input = self.generate_noise(n_samples)
         images = self.generator.predict([z_input, labels_input])
         #create class labes
         y = np.zeros((n_samples, 1))
@@ -67,42 +65,42 @@ class GAN():
         plt.show()
 
     # define the standalone generator model
-    def define_generator(latent_dim, n_classes=10):
-        # label input
+    def define_generator(self,n_classes=7):
+        # Etiqueta que indica la clase
         in_label = Input(shape=(1,))
-        # embedding for categorical input
-        li = Embedding(n_classes, 50)(in_label)
-        # linear multiplication
-        n_nodes = 7 * 7
+        # Agregamos la clase
+        li = Embedding(n_classes, 48)(in_label)
+        #Empezamos con una imagen más chica
+        n_nodes = 12 * 12
         li = Dense(n_nodes)(li)
-        # reshape to additional channel
-        li = Reshape((7, 7, 1))(li)
-        # image generator input
-        in_lat = Input(shape=(latent_dim,))
-        # foundation for 7x7 image
-        n_nodes = 128 * 7 * 7
+        #Ajustamos el tamaño agregando la etiqueta
+        li = Reshape((12, 12, 1))(li)
+        # recibimos la imagen de entrada
+        in_lat = Input(shape=(self.latent_dim,))
+        # Base para una imagen 12x12
+        n_nodes = 128 * 12 * 12
         gen = Dense(n_nodes)(in_lat)
         gen = LeakyReLU(alpha=0.2)(gen)
-        gen = Reshape((7, 7, 128))(gen)
-        # merge image gen and label input
+        gen = Reshape((12, 12, 128))(gen)
+        #Juntamos la imagen generada y su etiqueta
         merge = Concatenate()([gen, li])
-        # upsample to 14x14
+        # Upsample a 24x24 (por el padding)
         gen = Conv2DTranspose(128, (4,4), strides=(2,2), padding='same', 
                                             activation=LeakyReLU(alpha=0.2))(merge)
         gen = BatchNormalization()(gen)
-        # upsample to 28x28
+        # Upsample to 48x48
         gen = Conv2DTranspose(128, (4,4), strides=(2,2), padding='same', 
                                             activation=LeakyReLU(alpha=0.2))(gen)
         gen = BatchNormalization()(gen)
         # output
-        out_layer = Conv2D(1, (7,7), activation='tanh', padding='same')(gen)
+        out_layer = Conv2D(1, (12,12), activation='tanh', padding='same')(gen)
         # define model
         model = Model([in_lat, in_label], out_layer)
         return model
     
-    def define_discriminator(in_shape=(48, 48), n_classes=7):
+    def define_discriminator(self, in_shape=(48, 48, 1), n_classes=7):
         in_label = Input(shape=(1,))
-        li = Embedding(n_classes, 50)(in_label)
+        li = Embedding(n_classes, 48)(in_label)
         n_nodes = in_shape[0] * in_shape[1]
         li= Dense(n_nodes)(li)
         li = Reshape((in_shape[0], in_shape[1], 1))(li)
@@ -143,34 +141,32 @@ class GAN():
 
         return model
     
-    def train_gan(self, n_epochs=30, n_batch=512):
+    def train(self, n_epochs=30, n_batch=512):
         steps = int(self.dataset[0].shape[0] / n_batch)
-        half_batch = int(n_batch / 2)
+        half_batch = n_batch #int(n_batch / 2)
         # manually enumerate epochs
         for e in range(n_epochs):
-            # enumerate batches over the training set
-            for s in range(steps):
                 #TRAIN THE DISCRIMINATOR
                 # get randomly selected 'real' samples
-                [X_real, labels_real], y_real = self.get_dataset_samples(self.dataset, half_batch)
+                [X_real, labels_real], y_real = self.get_dataset_samples(half_batch)
                 # update discriminator model weights
                 d_loss1, _ = self.discriminator.train_on_batch([X_real, labels_real], y_real)
                 # generate 'fake' examples
-                [X_fake, labels], y_fake = self.generate_fake_samples(self.generator, self.noise_size, half_batch)
+                [X_fake, labels], y_fake = self.generate_fake_samples(half_batch)
                 # update discriminator model weights
                 d_loss2, _ = self.discriminator.train_on_batch([X_fake, labels], y_fake)
 
                 #TRAIN THE GENERATOR
                 # prepare points in latent space as input for the generator
-                [z_input, labels_input] = self.generate_noise(self.noise_size, n_batch)
+                [z_input, labels_input] = self.generate_noise(n_batch)
                 # create inverted labels for the fake samples
                 y_gan = np.ones((n_batch, 1))
                 # update the generator via the discriminator's error
                 g_loss = self.gan_model.train_on_batch([z_input, labels_input], y_gan)
                 # summarize loss on this batch
-                print('>%d, %d/%d, d1=%.3f, d2=%.3f g=%.3f' %
-                (e+1, s+1, steps, d_loss1, d_loss2, g_loss))
-                self.plot_results(X_fake, 8)  
+                print('>%d,  d1=%.3f, d2=%.3f g=%.3f' %
+                (e+1, d_loss1, d_loss2, g_loss))
+                #self.plot_results(X_fake, 8)  
             
         # save the generator model
         self.generator.save('cgan_generator.h5')
